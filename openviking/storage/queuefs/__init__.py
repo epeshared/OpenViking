@@ -1,7 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 from .embedding_msg import EmbeddingMsg
 from .embedding_queue import EmbeddingQueue
+from .embedding_tracker import EmbeddingTaskTracker
 from .named_queue import NamedQueue, QueueError, QueueStatus
 from .queue_manager import QueueManager, get_queue_manager, init_queue_manager
 from .semantic_dag import SemanticDagExecutor
@@ -18,6 +19,7 @@ __all__ = [
     "QueueError",
     "EmbeddingQueue",
     "EmbeddingMsg",
+    "EmbeddingTaskTracker",
     "SemanticQueue",
     "SemanticDagExecutor",
     "SemanticMsg",

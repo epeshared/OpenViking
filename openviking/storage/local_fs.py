@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 import json
 import os
 import re
@@ -11,6 +11,7 @@ from openviking.core.context import Context
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import EmbeddingQueue, get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
@@ -178,7 +179,7 @@ async def import_ovpack(
                     f"Resource already exists at {root_uri}. Use force=True to overwrite."
                 )
             logger.info(f"[local_fs] Overwriting existing resource at {root_uri}")
-        except FileNotFoundError:
+        except NotFoundError:
             # Path does not exist, safe to import
             pass
 
@@ -204,9 +205,10 @@ async def import_ovpack(
             if not zip_path:
                 continue
 
-            # Normalize path separators to handle Windows-created ZIPs
-            zip_path = zip_path.replace("\\", "/")
+            # Validate before normalization so backslash paths are rejected
             safe_zip_path = _validate_ovpack_member_path(zip_path, base_name)
+            # Normalize path separators to handle Windows-created ZIPs
+            safe_zip_path = safe_zip_path.replace("\\", "/")
 
             # Handle directory entries
             if safe_zip_path.endswith("/"):
@@ -247,7 +249,14 @@ async def export_ovpack(viking_fs, uri: str, to: str, ctx: RequestContext) -> st
 
     Returns:
         Exported file path
+
+    Raises:
+        ValueError: If export size exceeds limits (65536 files or 2GB total size)
     """
+    # Safety limits
+    MAX_FILES = 65536
+    MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+
     base_name = uri.strip().rstrip("/").split("/")[-1]
     if not base_name:
         base_name = "export"
@@ -260,6 +269,30 @@ async def export_ovpack(viking_fs, uri: str, to: str, ctx: RequestContext) -> st
     ensure_dir_exists(to)
 
     entries = await viking_fs.tree(uri, show_all_hidden=True, ctx=ctx)
+
+    # Check file count limit
+    file_count = sum(1 for entry in entries if not entry.get("isDir"))
+    if file_count > MAX_FILES:
+        raise ValueError(
+            f"Export aborted: too many files ({file_count} files, limit is {MAX_FILES}). "
+            f"Please export a smaller directory."
+        )
+
+    # Calculate total size and check limit
+    total_size = 0
+    for entry in entries:
+        if not entry.get("isDir"):
+            # Get file size from entry if available
+            size = entry.get("size", 0)
+            total_size += size
+
+    if total_size > MAX_TOTAL_SIZE:
+        size_mb = total_size / (1024 * 1024)
+        limit_mb = MAX_TOTAL_SIZE / (1024 * 1024)
+        raise ValueError(
+            f"Export aborted: total size too large ({size_mb:.1f}MB, limit is {limit_mb:.0f}MB). "
+            f"Please export a smaller directory."
+        )
 
     with zipfile.ZipFile(to, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
         # Write root directory entry

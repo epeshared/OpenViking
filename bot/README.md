@@ -83,100 +83,38 @@ uv pip install -e ".[bot,bot-langfuse,bot-telegram]"
 ## 🚀 Quick Start
 
 > [!TIP]
-> The easiest way to configure vikingbot is through the Console Web UI!
+> Configure vikingbot through the configuration file `~/.openviking/ov.conf`!
 > Get API keys: [OpenRouter](https://openrouter.ai/keys) (Global) · [Brave Search](https://brave.com/search/api/) (optional, for web search)
 
-**1. Start the gateway**
+**1. Initialize configuration**
 
 ```bash
-vikingbot gateway
+openviking-server --with-bot
 ```
 
 This will automatically:
 - Create a default config at `~/.openviking/ov.conf`
 - Create bot startup files in the OpenViking workspace, default path is `~/.openviking/data/bot/`
-- Start the Console Web UI at http://localhost:18791
+- Start the OpenViking server with bot integration
 
-**2. Configure via Console**
+**2. Configure via ov.conf**
 
-Open http://localhost:18791 in your browser and:
-- Go to the **Config** tab
-- Add your provider API keys (OpenRouter, OpenAI, etc.)
-- Save the config
+Edit `~/.openviking/ov.conf` to add your provider API keys (OpenRouter, OpenAI, etc.) and save the config.
 
 **3. Chat**
 
 ```bash
 # Send a single message directly
-vikingbot chat -m "What is 2+2?"
+ov chat -m "What is 2+2?"
 
 # Enter interactive chat mode (supports multi-turn conversations)
-vikingbot chat
+ov chat
 
 # Show plain-text replies (no Markdown rendering)
-vikingbot chat --no-markdown
-
-# Show runtime logs during chat (useful for debugging)
-vikingbot chat --logs
+ov chat --no-format
 ```
 
 That's it! You have a working AI assistant in 2 minutes.
-
-## 🐳 Docker Deployment
-
-You can also deploy vikingbot using Docker for easier setup and isolation.
-
-### Prerequisites
-
-First, install Docker:
-- **macOS**: Download [Docker Desktop](https://www.docker.com/products/docker-desktop)
-- **Windows**: Download [Docker Desktop](https://www.docker.com/products/docker-desktop)
-- **Linux**: Follow [Docker's official docs](https://docs.docker.com/engine/install/)
-
-Verify Docker installation:
-```bash
-docker --version
-```
-
-### Quick Volcengine Image Registry Deployment (Recommended)
-### Quick Docker Deploy
-
-```bash
-# 1. Create necessary directories
-mkdir -p ~/.openviking/
-
-# 2. Start container
-docker run -d \
-    --name vikingbot \
-    --restart unless-stopped \
-    --platform linux/amd64 \
-    -v ~/.openviking:/root/.openviking \
-    -p 18791:18791 \
-    vikingbot-cn-beijing.cr.volces.com/vikingbot/vikingbot:latest \
-    gateway
-
-# 3. View logs
-docker logs --tail 50 -f vikingbot
-```
-
-Press `Ctrl+C` to exit log view, the container continues running in background.
-
-### Local Build and Deploy
-
-If you want to build the Docker image locally:
-
-```bash
-# Build image
-./deploy/docker/build-image.sh
-
-# Deploy
-./deploy/docker/deploy.sh
-
-# Stop
-./deploy/docker/stop.sh
-```
-
-For more Docker deployment options, see [deploy/docker/README.md](deploy/docker/README.md).
 
 Talk to your vikingbot through Telegram, Discord, WhatsApp, Feishu, Mochat, DingTalk, Slack, Email, or QQ — anytime, anywhere.
 
@@ -201,7 +139,7 @@ Config file: `~/.openviking/ov.conf` (custom path can be set via environment var
 > Vikingbot shares the same configuration file with OpenViking. Configuration items are located under the `bot` field of the file, and will automatically merge global configurations such as `vlm`, `storage`, `server`, etc. No need to maintain a separate configuration file.
 
 > [!IMPORTANT]
-> After modifying the configuration (either via Console UI or by editing the file directly),
+> After modifying the configuration (by editing the file directly),
 > you need to restart the gateway service for changes to take effect.
 
 ### OpenViking Server Configuration
@@ -233,6 +171,8 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
 - `ov_server`: OpenViking Server configuration.
   - If not configured, the OpenViking server information configured in `ov.conf` is used by default
   - If you don't use the locally started OpenViking Server, you can configure the url and the corresponding root user's API Key here
+    - root_api_key: In a multi-tenant scenario, the API KEY must have root privileges; otherwise, the bot cannot automatically register multiple OpenViking users, which is used to implement memory isolation.
+    - account_id: Defaults to default, which is the account ID of OpenViking. All users under an OpenViking account share resources.
 - `channels`: Message platform configuration, see [Message Platform Configuration](bot/docs/CHANNEL.md) for details
 
 ```json
@@ -279,7 +219,7 @@ Vikingbot provides 7 dedicated OpenViking tools:
 | `openviking_add_resource` | Add local files as OpenViking resources |
 | `openviking_grep` | Search OpenViking resources using regular expressions |
 | `openviking_glob` | Match OpenViking resources using glob patterns |
-| `user_memory_search` | Search OpenViking user memory |
+| `openviking_memory_commit` | Commit session to ov |
 
 ### OpenViking Hooks
 
@@ -298,7 +238,7 @@ Vikingbot enables OpenViking hooks by default:
 
 ### Manual Configuration (Advanced)
 
-If you prefer to edit the config file directly instead of using the Console UI:
+Edit the config file directly:
 
 ```json
 {
@@ -318,6 +258,7 @@ Provider configuration is read from OpenViking config (`vlm` section in `ov.conf
 > - **Groq** provides free voice transcription via Whisper. If configured, Telegram voice messages will be automatically transcribed.
 > - **Zhipu Coding Plan**: If you're on Zhipu's coding plan, set `"apiBase": "https://open.bigmodel.cn/api/coding/paas/v4"` in your zhipu provider config.
 > - **MiniMax (Mainland China)**: If your API key is from MiniMax's mainland China platform (minimaxi.com), set `"apiBase": "https://api.minimaxi.com/v1"` in your minimax provider config.
+> - **MiniMax Recommended Models**: `MiniMax-M2.7` (peak performance) and `MiniMax-M2.7-highspeed` (faster, more agile). Configure with `"model": "MiniMax-M2.7"` in your agent config.
 
 | Provider | Purpose | Get API Key |
 |----------|---------|-------------|
@@ -479,7 +420,6 @@ You only need to add sandbox configuration when you want to change these default
 | Backend | Description |
 |---------|-------------|
 | `direct` | (Default) Runs code directly on the host |
-| `opensandbox` | Uses OpenSandbox service |
 | `srt` | Uses Anthropic's SRT sandbox runtime |
 
 **Available Modes:**
@@ -498,41 +438,6 @@ You only need to add sandbox configuration when you want to change these default
       "backends": {
         "direct": {
           "restrictToWorkspace": false
-        }
-      }
-    }
-  }
-}
-```
-
-**OpenSandbox Backend:**
-```json
-{
-  "bot": {
-    "sandbox": {
-      "backend": "opensandbox",
-      "backends": {
-        "opensandbox": {
-          "serverUrl": "http://localhost:18792",
-          "apiKey": "",
-          "defaultImage": "opensandbox/code-interpreter:v1.0.1"
-        }
-      }
-    }
-  }
-}
-```
-
-**Docker Backend:**
-```json
-{
-  "bot": {
-    "sandbox": {
-      "backend": "docker",
-      "backends": {
-        "docker": {
-          "image": "python:3.11-slim",
-          "networkMode": "bridge"
         }
       }
     }
@@ -570,21 +475,6 @@ You only need to add sandbox configuration when you want to change these default
 }
 ```
 
-**AIO Sandbox Backend:**
-```json
-{
-  "bot": {
-    "sandbox": {
-      "backend": "aiosandbox",
-      "backends": {
-        "aiosandbox": {
-          "baseUrl": "http://localhost:18794"
-        }
-      }
-    }
-  }
-}
-```
 
 **SRT Backend Setup:**
 
@@ -594,7 +484,7 @@ The SRT backend uses `@anthropic-ai/sandbox-runtime`.
 
 The SRT backend also requires these system packages to be installed:
 - `ripgrep` (rg) - for text search
-- `bubblewrap` (bwrap) - for sandbox isolation  
+- `bubblewrap` (bwrap) - for sandbox isolation
 - `socat` - for network proxy
 
 **Install on macOS:**
@@ -657,45 +547,6 @@ which nodejs
 
 | Command | Description |
 |---------|-------------|
-| `vikingbot chat -m "..."` | Chat with the agent |
-| `vikingbot chat` | Interactive chat mode |
-| `vikingbot chat --no-markdown` | Show plain-text replies |
-| `vikingbot chat --logs` | Show runtime logs during chat |
-| `vikingbot gateway` | Start the gateway and Console Web UI |
-| `vikingbot status` | Show status |
-| `vikingbot channels login` | Link WhatsApp (scan QR) |
-| `vikingbot channels status` | Show channel status |
-
-## 🖥️ Console Web UI
-
-The Console Web UI is automatically started when you run `vikingbot gateway`, accessible at http://localhost:18791.
-
-**Features:**
-- **Dashboard**: Quick overview of system status and sessions
-- **Config**: Configure providers, agents, channels, and tools in a user-friendly interface
-  - Form-based editor for easy configuration
-  - JSON editor for advanced users
-- **Sessions**: View and manage chat sessions
-- **Workspace**: Browse and edit files in the workspace directory
-
-> [!IMPORTANT]
-> After saving configuration changes in the Console, you need to restart the gateway service for changes to take effect.
-
-Interactive mode exits: `exit`, `quit`, `/exit`, `/quit`, `:q`, or `Ctrl+D`.
-
-<details>
-<summary><b>Scheduled Tasks (Cron)</b></summary>
-
-```bash
-# Add a job
-vikingbot cron add --name "daily" --message "Good morning!" --cron "0 9 * * *"
-vikingbot cron add --name "hourly" --message "Check status" --every 3600
-
-# List jobs
-vikingbot cron list
-
-# Remove a job
-vikingbot cron remove <job_id>
-```
-
-</details>
+| `ov chat -m "..."` | Send a single message to the agent |
+| `ov chat` | Interactive chat mode |
+| `ov chat --no-format` | Show plain-text replies (no Markdown) |

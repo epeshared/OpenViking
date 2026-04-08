@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 import struct
 from dataclasses import dataclass
 from enum import Enum
@@ -273,6 +273,9 @@ class _PyBytesRow:
 
 try:
     import openviking.storage.vectordb.engine as engine
+
+    if getattr(engine, "ENGINE_VARIANT", "unavailable") == "unavailable":
+        raise ImportError("vectordb engine backend is unavailable")
 
     # Use C++ implementation if available
     BytesRow = engine.BytesRow

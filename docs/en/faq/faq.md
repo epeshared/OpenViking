@@ -126,6 +126,7 @@ Config files at the default path `~/.openviking/ov.conf` are loaded automaticall
 | `openai` | OpenAI Embedding API |
 | `vikingdb` | VikingDB Embedding API |
 | `jina` | Jina AI Embedding API |
+| `ollama` | Ollama (local OpenAI-compatible server, no API key required) |
 
 Supports Dense, Sparse, and Hybrid embedding modes.
 
@@ -385,7 +386,7 @@ client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 
 ### Is OpenViking open source?
 
-Yes, OpenViking is fully open source under the Apache 2.0 license.
+Yes, OpenViking main project is open source under the AGPL-3.0 license, and examples/ and crates/ov_cli are licensed under the Apache 2.0 license.
 
 ## Related Documentation
 

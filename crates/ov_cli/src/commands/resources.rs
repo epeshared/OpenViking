@@ -1,6 +1,6 @@
 use crate::client::HttpClient;
 use crate::error::Result;
-use crate::output::{output_success, OutputFormat};
+use crate::output::{OutputFormat, output_success};
 
 pub async fn add_resource(
     client: &HttpClient,
@@ -16,6 +16,7 @@ pub async fn add_resource(
     include: Option<String>,
     exclude: Option<String>,
     directly_upload_media: bool,
+    watch_interval: f64,
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -33,6 +34,7 @@ pub async fn add_resource(
             include,
             exclude,
             directly_upload_media,
+            watch_interval,
         )
         .await?;
     output_success(&result, format, compact);

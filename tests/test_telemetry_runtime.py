@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from openviking.models.embedder.base import EmbedResult
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
 from openviking.storage.collection_schemas import TextEmbeddingHandler
+from openviking.storage.queuefs.semantic_dag import DagStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.telemetry import (
@@ -74,6 +75,13 @@ def test_telemetry_summary_breaks_down_llm_and_embedding_token_usage():
     assert "errors" not in summary
 
 
+def test_disabled_telemetry_still_has_request_id():
+    telemetry = MemoryOperationTelemetry(operation="resources.add_resource", enabled=False)
+
+    assert telemetry.telemetry_id
+    assert telemetry.telemetry_id.startswith("tm_")
+
+
 def test_telemetry_summary_uses_simplified_internal_metric_keys():
     summary = MemoryOperationTelemetry(
         operation="search.find",
@@ -105,7 +113,6 @@ def test_telemetry_summary_uses_simplified_internal_metric_keys():
         "total": 4,
         "done": 3,
         "pending": 1,
-        "running": 0,
     }
     assert result["memory"] == {"extracted": 6}
 
@@ -134,15 +141,25 @@ async def test_semantic_processor_binds_registered_operation_telemetry(monkeypat
         async def ls(self, uri, ctx=None):
             return []
 
-    async def fake_process_single_directory(**kwargs):
-        assert get_current_telemetry() is telemetry
-        get_current_telemetry().record_token_usage("llm", 11, 7)
+    class _FakeDagExecutor:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self, root_uri):
+            assert get_current_telemetry() is telemetry
+            get_current_telemetry().record_token_usage("llm", 11, 7)
+
+        def get_stats(self):
+            return DagStats()
 
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: FakeVikingFS(),
     )
-    monkeypatch.setattr(processor, "_process_single_directory", fake_process_single_directory)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
+        lambda **kwargs: _FakeDagExecutor(**kwargs),
+    )
 
     try:
         await processor.on_dequeue(
@@ -160,7 +177,7 @@ async def test_semantic_processor_binds_registered_operation_telemetry(monkeypat
     summary = result.summary
     assert summary["tokens"]["total"] == 18
     assert summary["tokens"]["llm"]["total"] == 18
-    assert summary["tokens"]["embedding"]["total"] == 0
+    assert "embedding" not in summary["tokens"]
 
 
 @pytest.mark.asyncio
@@ -185,7 +202,7 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
     class _DummyVikingDB:
         is_closing = False
 
-        async def upsert(self, _data):
+        async def upsert(self, _data, *, ctx=None):
             return "rec-1"
 
     monkeypatch.setattr(
@@ -270,13 +287,12 @@ async def test_resource_service_add_resource_reports_queue_summary(monkeypatch):
     summary = telemetry_result.summary
     assert summary["queue"] == {
         "semantic": {"processed": 2, "error_count": 1},
-        "embedding": {"processed": 5, "error_count": 0},
+        "embedding": {"processed": 5},
     }
     assert summary["semantic_nodes"] == {
         "total": 3,
         "done": 2,
         "pending": 1,
-        "running": 0,
     }
     assert "memory" not in summary
     assert "errors" not in summary

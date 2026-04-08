@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """BuildingTree container for OpenViking context trees."""
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -28,6 +28,7 @@ class BuildingTree:
         self._contexts: List["Context"] = []
         self._uri_map: Dict[str, "Context"] = {}
         self._root_uri: Optional[str] = None
+        self._candidate_uri: Optional[str] = None
 
     def add_context(self, context: "Context") -> None:
         """Add a context to the tree."""

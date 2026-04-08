@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 AGFS Client utilities for creating and configuring AGFS clients.
 """
@@ -30,7 +30,13 @@ def create_agfs_client(agfs_config: Any) -> Any:
 
     if mode == "binding-client":
         # Import binding client if mode is binding-client
-        from openviking.pyagfs import AGFSBindingClient
+        # Use get_binding_client() to respect RAGFS_IMPL env var > config.impl > "auto"
+        from openviking.pyagfs import get_binding_client
+
+        config_impl = getattr(agfs_config, "impl", "auto")
+        env_impl = os.environ.get("RAGFS_IMPL", "").lower() or None
+        effective_impl = env_impl or config_impl or "auto"
+        AGFSBindingClient, _ = get_binding_client(config_impl)
 
         if AGFSBindingClient is None:
             raise ImportError(
@@ -39,24 +45,39 @@ def create_agfs_client(agfs_config: Any) -> Any:
                 "to build and install the AGFS SDK with native bindings."
             )
 
-        lib_path = getattr(agfs_config, "lib_path", None)
-        if lib_path and lib_path not in ["1", "default"]:
-            os.environ["AGFS_LIB_PATH"] = lib_path
-        else:
-            os.environ["AGFS_LIB_PATH"] = str(Path(__file__).parent.parent / "lib")
-
-        # Check if binding library exists
+        # Go ctypes binding needs AGFS_LIB_PATH and a shared library on disk.
+        # Rust PyO3 binding is compiled into ragfs_python — skip library checks.
         try:
-            from openviking.pyagfs.binding_client import _find_library
-
-            actual_lib_path = _find_library()
-        except Exception:
-            raise ImportError(
-                "AGFS binding library not found. Please run 'pip install -e .' in the project root to build and install the AGFS SDK."
+            from openviking.pyagfs.binding_client import (
+                AGFSBindingClient as _GoBindingClient,
             )
 
+            is_go_binding = AGFSBindingClient is _GoBindingClient
+        except (ImportError, OSError):
+            is_go_binding = False
+
+        if is_go_binding:
+            lib_path = getattr(agfs_config, "lib_path", None)
+            if lib_path and lib_path not in ["1", "default"]:
+                os.environ["AGFS_LIB_PATH"] = lib_path
+            else:
+                os.environ["AGFS_LIB_PATH"] = str(Path(__file__).parent.parent / "lib")
+
+            try:
+                from openviking.pyagfs.binding_client import _find_library
+
+                _find_library()
+            except Exception:
+                raise ImportError(
+                    "AGFS binding library not found. Please run 'pip install -e .' in the project root to build and install the AGFS SDK."
+                )
+
         client = AGFSBindingClient()
-        logger.info(f"[AGFSUtils] Created AGFSBindingClient (lib_path={actual_lib_path})")
+        binding_type = "Rust (ragfs-python)" if not is_go_binding else "Go (libagfsbinding)"
+        logger.warning(
+            f"[AGFS] Binding impl selected: {binding_type} "
+            f"(RAGFS_IMPL={effective_impl}, env={env_impl}, config={config_impl})"
+        )
 
         # Automatically mount backend for binding client
         mount_agfs_backend(client, agfs_config)
@@ -82,10 +103,11 @@ def mount_agfs_backend(agfs: Any, agfs_config: Any) -> None:
         agfs_config: AGFS configuration object containing backend settings.
     """
     from openviking.agfs_manager import AGFSManager
-    from openviking.pyagfs import AGFSBindingClient
 
     # Only binding-client needs manual mounting. HTTP server handles its own mounting.
-    if AGFSBindingClient is None or not isinstance(agfs, AGFSBindingClient):
+    # Check for the presence of a `mount` method as the duck-type indicator for
+    # binding clients (works for both Rust and Go implementations).
+    if not callable(getattr(agfs, "mount", None)):
         return
 
     # 1. Mount standard plugins to align with HTTP server behavior
@@ -99,6 +121,10 @@ def mount_agfs_backend(agfs: Any, agfs_config: Any) -> None:
             local_dir = plugin_config["config"]["local_dir"]
             os.makedirs(local_dir, exist_ok=True)
             logger.debug(f"[AGFSUtils] Ensured local directory exists: {local_dir}")
+        # Ensure queuefs db_path parent directory exists before mounting
+        if plugin_name == "queuefs" and "db_path" in plugin_config.get("config", {}):
+            db_path = plugin_config["config"]["db_path"]
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
         try:
             agfs.unmount(mount_path)

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Unified context class for OpenViking."""
 
 from datetime import datetime, timezone
@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.uri import VikingURI
 
 
 class ResourceContentType(str, Enum):
@@ -56,6 +57,7 @@ class Context:
         self,
         uri: str,
         parent_uri: Optional[str] = None,
+        temp_uri: Optional[str] = None,
         is_leaf: bool = False,
         abstract: str = "",
         context_type: Optional[str] = None,
@@ -78,6 +80,7 @@ class Context:
         self.id = id or str(uuid4())
         self.uri = uri
         self.parent_uri = parent_uri
+        self.temp_uri = temp_uri
         self.is_leaf = is_leaf
         self.abstract = abstract
         self.context_type = context_type or self._derive_context_type()
@@ -159,6 +162,7 @@ class Context:
             "id": self.id,
             "uri": self.uri,
             "parent_uri": self.parent_uri,
+            "temp_uri": self.temp_uri,
             "is_leaf": self.is_leaf,
             "abstract": self.abstract,
             "context_type": self.context_type,
@@ -186,6 +190,15 @@ class Context:
 
         return data
 
+    @staticmethod
+    def _derive_parent_uri(uri: str) -> Optional[str]:
+        """Best-effort parent URI derivation for records persisted without parent_uri."""
+        try:
+            parent = VikingURI(uri).parent
+        except Exception:
+            return None
+        return parent.uri if parent else None
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Context":
         """Create a context object from dictionary."""
@@ -193,7 +206,8 @@ class Context:
         user_obj = UserIdentifier.from_dict(user_data) if isinstance(user_data, dict) else user_data
         obj = cls(
             uri=data["uri"],
-            parent_uri=data.get("parent_uri"),
+            parent_uri=data.get("parent_uri") or cls._derive_parent_uri(data["uri"]),
+            temp_uri=data.get("temp_uri"),
             is_leaf=data.get("is_leaf", False),
             abstract=data.get("abstract", ""),
             context_type=data.get("context_type"),

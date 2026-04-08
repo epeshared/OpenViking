@@ -1,8 +1,17 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
+
+
+class DirectoryMarkerMode(str, Enum):
+    """How S3 directory markers should be persisted."""
+
+    NONE = "none"
+    EMPTY = "empty"
+    NONEMPTY = "nonempty"
 
 
 class S3Config(BaseModel):
@@ -44,6 +53,11 @@ class S3Config(BaseModel):
     use_path_style: bool = Field(
         default=True,
         description="true represent UsePathStyle for MinIO and some S3-compatible services; false represent VirtualHostStyle for TOS  and some S3-compatible services.",
+    )
+
+    directory_marker_mode: DirectoryMarkerMode = Field(
+        default=DirectoryMarkerMode.EMPTY,
+        description="How to persist S3 directory markers: 'none' skips marker creation, 'empty' writes a zero-byte marker, and 'nonempty' writes a non-empty marker payload. Defaults to 'empty'.",
     )
 
     model_config = {"extra": "forbid"}
@@ -89,6 +103,13 @@ class AGFSConfig(BaseModel):
         description="AGFS client mode: 'http-client' | 'binding-client'",
     )
 
+    impl: str = Field(
+        default="auto",
+        description="Binding implementation to use when mode is 'binding-client'. "
+        "'auto' = Rust first with Go fallback, 'rust' = Rust only, 'go' = Go only. "
+        "Can be overridden by the RAGFS_IMPL environment variable.",
+    )
+
     backend: str = Field(
         default="local", description="AGFS storage backend: 'local' | 's3' | 'memory'"
     )
@@ -121,6 +142,11 @@ class AGFSConfig(BaseModel):
         if self.mode not in ["http-client", "binding-client"]:
             raise ValueError(
                 f"Invalid AGFS mode: '{self.mode}'. Must be one of: 'http-client', 'binding-client'"
+            )
+
+        if self.impl not in ["auto", "rust", "go"]:
+            raise ValueError(
+                f"Invalid AGFS impl: '{self.impl}'. Must be one of: 'auto', 'rust', 'go'"
             )
 
         if self.backend not in ["local", "s3", "memory"]:

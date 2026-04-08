@@ -21,6 +21,7 @@ class ChannelType(str, Enum):
     SLACK = "slack"
     QQ = "qq"
     OPENAPI = "openapi"
+    BOT_API = "bot_api"
 
 
 class SandboxBackend(str, Enum):
@@ -45,6 +46,13 @@ class AgentMemoryMode(str, Enum):
     PER_SESSION = "per-session"
     SHARED = "shared"
     PER_CHANNEL = "per-channel"
+
+
+class BotMode(str, Enum):
+    """Bot running mode enumeration."""
+    NORMAL = "normal"
+    READONLY = "readonly"
+    DEBUG = "debug"
 
 
 class BaseChannelConfig(BaseModel):
@@ -104,11 +112,12 @@ class FeishuChannelConfig(BaseChannelConfig):
 
     type: ChannelType = ChannelType.FEISHU
     app_id: str = ""
-    open_id: str = ""
+    bot_name: str = ""
     app_secret: str = ""
     encrypt_key: str = ""
     verification_token: str = ""
-    allow_from: list[str] = Field(default_factory=list)  ## 允许更新Agent对话的Feishu用户ID列表
+    allow_from: list[str] = Field(default_factory=list)
+    allow_cmd_from: list[str] = Field(default_factory=list)  ## 允许执行命令的Feishu用户ID列表
     thread_require_mention: bool = Field(default=True, description="话题群模式下是否需要@才响应：默认True=所有消息必须@才响应；False=新话题首条消息无需@，后续回复必须@")
 
     def channel_id(self) -> str:
@@ -265,6 +274,21 @@ class OpenAPIChannelConfig(BaseChannelConfig):
         return self._channel_id
 
 
+class BotChannelConfig(BaseChannelConfig):
+    """Bot channel configuration for multi-channel support."""
+
+    type: ChannelType = ChannelType.BOT_API
+    enabled: bool = True
+    api_key: str = ""  # If empty, no auth required
+    allow_from: list[str] = Field(default_factory=list)
+    max_concurrent_requests: int = 100
+    need_mention: bool = False
+    id: str = "default"  # Channel identifier for multi-channel support
+
+    def channel_id(self) -> str:
+        return self.id
+
+
 class ChannelsConfig(BaseModel):
     """Configuration for chat channels - array of channel configs."""
 
@@ -364,6 +388,8 @@ class ChannelsConfig(BaseModel):
             return QQChannelConfig(**config)
         elif channel_type == ChannelType.OPENAPI:
             return OpenAPIChannelConfig(**config)
+        elif channel_type == ChannelType.BOT_API:
+            return BotChannelConfig(**config)
         else:
             return BaseChannelConfig(**config)
 
@@ -437,6 +463,7 @@ class WebSearchConfig(BaseModel):
     """Web search tool configuration."""
 
     api_key: str = ""  # Brave Search API key
+    tavily_api_key: str = ""  # Tavily Search API key
     max_results: int = 5
 
 
@@ -584,6 +611,7 @@ class SandboxConfig(BaseModel):
     backend: SandboxBackend = SandboxBackend.DIRECT
     mode: SandboxMode = SandboxMode.SHARED
     backends: SandboxBackendsConfig = Field(default_factory=SandboxBackendsConfig)
+    restrict_workspaces: dict[str, str] = Field(default_factory=dict)
 
 
 class Config(BaseSettings):
@@ -615,7 +643,12 @@ class Config(BaseSettings):
     )
     storage_workspace: Optional[str] = None  # From ov.conf root level storage.workspace
     use_local_memory: bool = False
-    read_only: bool = False
+    mode: BotMode = BotMode.NORMAL
+
+    @property
+    def read_only(self) -> bool:
+        """Backward compatibility for read_only property."""
+        return self.mode == BotMode.READONLY
 
     @property
     def channels_config(self) -> ChannelsConfig:

@@ -125,6 +125,7 @@ pip install openviking --upgrade --force-reinstall
 | `openai` | OpenAI Embedding API |
 | `vikingdb` | VikingDB Embedding API |
 | `jina` | Jina AI Embedding API |
+| `ollama` | Ollama（本地 OpenAI 兼容服务器，无需 API Key） |
 
 支持 Dense、Sparse 和 Hybrid 三种 Embedding 模式。
 
@@ -384,7 +385,7 @@ client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 
 ### OpenViking 是开源的吗？
 
-是的，OpenViking 完全开源，采用 Apache 2.0 许可证。
+是的，OpenViking 完全开源，主体采用 AGPLv3 许可证，详见 README.md 说明。
 
 ## 相关文档
 

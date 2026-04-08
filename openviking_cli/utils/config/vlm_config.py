@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
-from typing import Any, Dict, Optional
+# SPDX-License-Identifier: AGPL-3.0
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -12,7 +12,7 @@ class VLMConfig(BaseModel):
     api_key: Optional[str] = Field(default=None, description="API key")
     api_base: Optional[str] = Field(default=None, description="API base URL")
     temperature: float = Field(default=0.0, description="Generation temperature")
-    max_retries: int = Field(default=2, description="Maximum retry attempts")
+    max_retries: int = Field(default=3, description="Maximum retry attempts")
 
     provider: Optional[str] = Field(default=None, description="Provider type")
     backend: Optional[str] = Field(
@@ -26,10 +26,28 @@ class VLMConfig(BaseModel):
 
     default_provider: Optional[str] = Field(default=None, description="Default provider name")
 
+    max_tokens: Optional[int] = Field(
+        default=None,
+        description="Maximum tokens for VLM completion output (None = provider default)",
+    )
+
     thinking: bool = Field(default=False, description="Enable thinking mode for VolcEngine models")
 
     max_concurrent: int = Field(
         default=100, description="Maximum number of concurrent LLM calls for semantic processing"
+    )
+
+    api_version: Optional[str] = Field(
+        default=None,
+        description="API version for Azure OpenAI (e.g., '2025-01-01-preview').",
+    )
+
+    extra_headers: Optional[Dict[str, str]] = Field(
+        default=None, description="Extra HTTP headers for OpenAI-compatible providers"
+    )
+
+    stream: bool = Field(
+        default=False, description="Enable streaming mode for OpenAI-compatible providers"
     )
 
     _vlm_instance: Optional[Any] = None
@@ -68,6 +86,10 @@ class VLMConfig(BaseModel):
                 self.providers[self.provider]["api_key"] = self.api_key
             if self.api_base and "api_base" not in self.providers[self.provider]:
                 self.providers[self.provider]["api_base"] = self.api_base
+            if self.extra_headers and "extra_headers" not in self.providers[self.provider]:
+                self.providers[self.provider]["extra_headers"] = self.extra_headers
+            if self.stream and "stream" not in self.providers[self.provider]:
+                self.providers[self.provider]["stream"] = self.stream
 
     def _has_any_config(self) -> bool:
         """Check if any config is provided."""
@@ -128,12 +150,20 @@ class VLMConfig(BaseModel):
         """Build VLM instance config dict."""
         config, name = self.get_provider_config()
 
+        # Get stream from provider config if available, fallback to self.stream
+        stream = (
+            config.get("stream") if config and config.get("stream") is not None else self.stream
+        )
+
         result = {
             "model": self.model,
             "temperature": self.temperature,
             "max_retries": self.max_retries,
             "provider": name,
             "thinking": self.thinking,
+            "max_tokens": self.max_tokens,
+            "stream": stream,
+            "api_version": self.api_version,
         }
 
         if config:
@@ -143,15 +173,35 @@ class VLMConfig(BaseModel):
 
         return result
 
-    def get_completion(self, prompt: str, thinking: bool = False) -> str:
+    def get_completion(
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, Any]:
         """Get LLM completion."""
-        return self.get_vlm_instance().get_completion(prompt, thinking)
+        return self.get_vlm_instance().get_completion(
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
+        )
 
     async def get_completion_async(
-        self, prompt: str, thinking: bool = False, max_retries: int = 0
-    ) -> str:
-        """Get LLM completion asynchronously, max_retries=0 means no retry."""
-        return await self.get_vlm_instance().get_completion_async(prompt, thinking, max_retries)
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, Any]:
+        """Get LLM completion asynchronously."""
+        return await self.get_vlm_instance().get_completion_async(
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
+        )
 
     def is_available(self) -> bool:
         """Check if LLM is configured."""
@@ -159,18 +209,34 @@ class VLMConfig(BaseModel):
 
     def get_vision_completion(
         self,
-        prompt: str,
-        images: list,
+        prompt: str = "",
+        images: Optional[list] = None,
         thinking: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, Any]:
         """Get LLM completion with images."""
-        return self.get_vlm_instance().get_vision_completion(prompt, images, thinking)
+        return self.get_vlm_instance().get_vision_completion(
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
+        )
 
     async def get_vision_completion_async(
         self,
-        prompt: str,
-        images: list,
+        prompt: str = "",
+        images: Optional[list] = None,
         thinking: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, Any]:
         """Get LLM completion with images asynchronously."""
-        return await self.get_vlm_instance().get_vision_completion_async(prompt, images, thinking)
+        return await self.get_vlm_instance().get_vision_completion_async(
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
+        )

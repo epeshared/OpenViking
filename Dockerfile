@@ -16,8 +16,10 @@ COPY --from=rust-toolchain /usr/local/cargo /usr/local/cargo
 COPY --from=rust-toolchain /usr/local/rustup /usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
-ENV PATH="/usr/local/cargo/bin:/usr/local/go/bin:${PATH}"
+ENV PATH="/app/.venv/bin:/usr/local/cargo/bin:/usr/local/go/bin:${PATH}"
 ARG OPENVIKING_VERSION=0.0.0
+ARG TARGETPLATFORM
+ARG UV_LOCK_STRATEGY=auto
 ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=${OPENVIKING_VERSION}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -34,6 +36,8 @@ WORKDIR /app
 # Copy source required for setup.py artifact builds and native extension build.
 COPY Cargo.toml Cargo.lock ./
 COPY pyproject.toml uv.lock setup.py README.md ./
+COPY build_support/ build_support/
+COPY bot/ bot/
 COPY crates/ crates/
 COPY openviking/ openviking/
 COPY openviking_cli/ openviking_cli/
@@ -41,8 +45,63 @@ COPY src/ src/
 COPY third_party/ third_party/
 
 # Install project and dependencies (triggers setup.py artifact builds + build_extension).
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-editable
+# Default to auto-refreshing uv.lock inside the ephemeral build context when it is
+# stale, so Docker builds stay unblocked after dependency changes. Set
+# UV_LOCK_STRATEGY=locked to keep fail-fast reproducibility checks.
+RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
+    case "${UV_LOCK_STRATEGY}" in \
+        locked) \
+            uv sync --locked --no-editable --extra bot --extra gemini \
+            ;; \
+        auto) \
+            if ! uv lock --check; then \
+                uv lock; \
+            fi; \
+            uv sync --locked --no-editable --extra bot --extra gemini \
+            ;; \
+        *) \
+            echo "Unsupported UV_LOCK_STRATEGY: ${UV_LOCK_STRATEGY}" >&2; \
+            exit 2 \
+            ;; \
+    esac
+
+# Build ragfs-python (Rust AGFS binding) and extract the native extension
+# into the installed openviking package so it ships alongside the Go binding.
+# Selection at runtime via RAGFS_IMPL env var (auto/rust/go).
+RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
+    uv pip install maturin && \
+    export _TMPDIR=$(mktemp -d) && \
+    trap 'rm -rf "$_TMPDIR"' EXIT && \
+    cd crates/ragfs-python && \
+    python -m maturin build --release --out "$_TMPDIR" && \
+    cd ../.. && \
+    export _OV_LIB=$(python -c "import openviking; from pathlib import Path; print(Path(openviking.__file__).resolve().parent / 'lib')") && \
+    mkdir -p "$_OV_LIB" && \
+    python - <<'PY'
+import glob
+import os
+import sys
+import zipfile
+
+tmpdir = os.environ["_TMPDIR"]
+ov_lib = os.environ["_OV_LIB"]
+whls = glob.glob(os.path.join(tmpdir, "ragfs_python-*.whl"))
+assert whls, "maturin produced no wheel"
+
+with zipfile.ZipFile(whls[0]) as zf:
+    for name in zf.namelist():
+        bn = os.path.basename(name)
+        if bn.startswith("ragfs_python") and (bn.endswith(".so") or bn.endswith(".pyd")):
+            dst = os.path.join(ov_lib, bn)
+            with zf.open(name) as src, open(dst, "wb") as f:
+                f.write(src.read())
+            os.chmod(dst, 0o755)
+            print(f"ragfs-python: extracted {bn} -> {dst}")
+            sys.exit(0)
+
+print("WARNING: No ragfs_python .so/.pyd in wheel")
+sys.exit(1)
+PY
 
 # Stage 4: runtime
 FROM python:3.13-slim-trixie
@@ -56,14 +115,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY --from=py-builder /app/.venv /app/.venv
+COPY docker/openviking-console-entrypoint.sh /usr/local/bin/openviking-console-entrypoint
+RUN chmod +x /usr/local/bin/openviking-console-entrypoint
 ENV PATH="/app/.venv/bin:$PATH"
 ENV OPENVIKING_CONFIG_FILE="/app/ov.conf"
 
-EXPOSE 1933
+EXPOSE 1933 8020
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS http://127.0.0.1:1933/health || exit 1
 
-# Default runs server; override command to run CLI, e.g.:
+# Default runs server + console; override command to run CLI, e.g.:
 # docker run --rm <image> -v "$HOME/.openviking/ovcli.conf:/root/.openviking/ovcli.conf" openviking --help
-CMD ["openviking-server"]
+ENTRYPOINT ["openviking-console-entrypoint"]

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """AGFS Process Manager - Responsible for starting and stopping the AGFS server."""
 
 import atexit
@@ -133,9 +133,23 @@ class AGFSManager:
                         "version": "1.0.0",
                     },
                 },
+                # TODO(multi-node): SQLite backend is single-node only. Each AGFS instance
+                # gets its own isolated queue.db under its own data_path, so messages
+                # enqueued on node A are invisible to node B. For multi-node deployments,
+                # switch backend to "tidb" or "mysql" so all nodes share the same queue.
+                #
+                # Additionally, the TiDB backend currently uses immediate soft-delete on
+                # Dequeue (no two-phase status='processing' transition), meaning there is
+                # no at-least-once guarantee: a worker crash loses the in-flight message.
+                # The TiDB backend's Ack() and RecoverStale() are both no-ops and must be
+                # implemented before it can be used safely in production.
                 "queuefs": {
                     "enabled": True,
                     "path": "/queue",
+                    "config": {
+                        "backend": "sqlite",
+                        "db_path": str(self.data_path / "_system" / "queue" / "queue.db"),
+                    },
                 },
             },
         }
@@ -152,19 +166,22 @@ class AGFSManager:
             # AGFS S3 backend configuration (s3fs plugin)
             # This enables AGFS to mount an S3 bucket as a local filesystem.
             # Implementation details: third_party/agfs/agfs-server/pkg/plugins/s3fs/s3fs.go
+            s3_plugin_config = {
+                "bucket": self.s3_config.bucket,
+                "region": self.s3_config.region,
+                "access_key_id": self.s3_config.access_key,
+                "secret_access_key": self.s3_config.secret_key,
+                "endpoint": self.s3_config.endpoint,
+                "prefix": self.s3_config.prefix,
+                "disable_ssl": not self.s3_config.use_ssl,
+                "use_path_style": self.s3_config.use_path_style,
+                "directory_marker_mode": self.s3_config.directory_marker_mode.value,
+            }
+
             config["plugins"]["s3fs"] = {
                 "enabled": True,
                 "path": "/local",
-                "config": {
-                    "bucket": self.s3_config.bucket,
-                    "region": self.s3_config.region,
-                    "access_key_id": self.s3_config.access_key,
-                    "secret_access_key": self.s3_config.secret_key,
-                    "endpoint": self.s3_config.endpoint,
-                    "prefix": self.s3_config.prefix,
-                    "disable_ssl": not self.s3_config.use_ssl,
-                    "use_path_style": self.s3_config.use_path_style,
-                },
+                "config": s3_plugin_config,
             }
         elif self.backend == "memory":
             config["plugins"]["memfs"] = {
@@ -196,6 +213,7 @@ class AGFSManager:
         self._check_port_available()
 
         self.vikingfs_path.mkdir(parents=True, exist_ok=True)
+        (self.data_path / "_system" / "queue").mkdir(parents=True, exist_ok=True)
         # NOTICE: should use viking://temp/ instead of self.vikingfs_path / "temp"
         # Create temp directory for Parser use
         # (self.vikingfs_path / "temp").mkdir(exist_ok=True)

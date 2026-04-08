@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 from typing import Optional
 
 from openviking_cli.utils.logger import get_logger
@@ -21,6 +21,7 @@ class EmbeddingQueue(NamedQueue):
         if msg is None:
             logger.warning("Embedding message is None, skipping enqueuing")
             return ""
+        logger.debug(f"Enqueued embedding message: {msg}")
         return await super().enqueue(msg.to_dict())
 
     async def dequeue(self) -> Optional[EmbeddingMsg]:

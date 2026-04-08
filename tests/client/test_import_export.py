@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Import/export tests"""
 
@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from openviking import AsyncOpenViking
+from openviking.storage.transaction import release_all_locks
 
 
 class TestExportOvpack:
@@ -99,6 +100,7 @@ class TestImportOvpack:
         await client.export_ovpack(original_uri, str(export_path))
 
         # Delete original resource
+        await release_all_locks()
         await client.rm(original_uri, recursive=True)
 
         # Import

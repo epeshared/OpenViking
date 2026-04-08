@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Shared fixtures for OpenViking server tests."""
 
@@ -8,6 +8,7 @@ import socket
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -20,8 +21,10 @@ from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
+from openviking.storage.transaction import reset_lock_manager
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -54,17 +57,31 @@ def _install_fake_embedder(monkeypatch):
         def __init__(self):
             super().__init__(model_name="test-fake-embedder")
 
-        def embed(self, text: str) -> EmbedResult:
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
             return EmbedResult(dense_vector=[0.1] * dimension)
 
-        def embed_batch(self, texts: list[str]) -> list[EmbedResult]:
-            return [self.embed(text) for text in texts]
+        def embed_batch(self, texts: list[str], is_query: bool = False) -> list[EmbedResult]:
+            return [self.embed(text, is_query=is_query) for text in texts]
 
         def get_dimension(self) -> int:
             return dimension
 
     monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: FakeEmbedder())
     return FakeEmbedder
+
+
+def _install_fake_vlm(monkeypatch):
+    """Use a fake VLM so server tests never hit external LLM APIs."""
+
+    async def _fake_get_completion(self, prompt, thinking=False):
+        return "# Test Summary\n\nFake summary for testing.\n\n## Details\nTest content."
+
+    async def _fake_get_vision_completion(self, prompt, images, thinking=False):
+        return "Fake image description for testing."
+
+    monkeypatch.setattr(VLMConfig, "is_available", lambda self: True)
+    monkeypatch.setattr(VLMConfig, "get_completion_async", _fake_get_completion)
+    monkeypatch.setattr(VLMConfig, "get_vision_completion_async", _fake_get_vision_completion)
 
 
 # ---------------------------------------------------------------------------
@@ -91,10 +108,29 @@ def sample_markdown_file(temp_dir: Path) -> Path:
     return f
 
 
+@pytest.fixture(scope="function")
+def upload_temp_dir(temp_dir: Path, monkeypatch) -> Path:
+    """Use the per-test temp directory as the HTTP upload temp dir."""
+    config = SimpleNamespace(
+        storage=SimpleNamespace(get_upload_temp_dir=lambda: temp_dir),
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.resources.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.pack.get_openviking_config",
+        lambda: config,
+    )
+    return temp_dir
+
+
 @pytest_asyncio.fixture(scope="function")
 async def service(temp_dir: Path, monkeypatch):
     """Create and initialize an OpenVikingService in embedded mode."""
+    reset_lock_manager()
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
+    _install_fake_vlm(monkeypatch)
     svc = OpenVikingService(
         path=str(temp_dir / "data"), user=UserIdentifier.the_default_user("test_user")
     )
@@ -102,6 +138,7 @@ async def service(temp_dir: Path, monkeypatch):
     svc.viking_fs.query_embedder = fake_embedder_cls()
     yield svc
     await svc.close()
+    reset_lock_manager()
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -146,7 +183,9 @@ async def client_with_resource(client, service, sample_markdown_file):
 async def running_server(temp_dir: Path, monkeypatch):
     """Start a real uvicorn server in a background thread."""
     await AsyncOpenViking.reset()
+    reset_lock_manager()
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
+    _install_fake_vlm(monkeypatch)
 
     svc = OpenVikingService(
         path=str(temp_dir / "sdk_data"), user=UserIdentifier.the_default_user("sdk_test_user")

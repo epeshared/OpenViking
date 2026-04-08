@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 RAGAS evaluator integration for OpenViking.
 """
@@ -111,8 +111,8 @@ def _create_ragas_llm_from_config() -> Optional[Any]:
         RAGAS LLM instance or None if VLM is not configured.
     """
     try:
-        from openai import OpenAI
-        from ragas.llms import llm_factory
+        from langchain_openai import ChatOpenAI
+        from ragas.llms import LangchainLLMWrapper
     except ImportError:
         return None
 
@@ -124,11 +124,12 @@ def _create_ragas_llm_from_config() -> Optional[Any]:
 
         logger.info(f"Using RAGAS LLM from environment: model={model_name}, base_url={api_base}")
 
-        client = OpenAI(
+        openai_model = ChatOpenAI(
+            model=model_name,
             api_key=api_key,
             base_url=api_base,
         )
-        return llm_factory(model_name, client=client)
+        return LangchainLLMWrapper(openai_model)
 
     try:
         from openviking_cli.utils.config import get_openviking_config
@@ -151,13 +152,13 @@ def _create_ragas_llm_from_config() -> Optional[Any]:
         )
         return None
 
-    client = OpenAI(
+    model_name = vlm_config.model or "gpt-4o-mini"
+    openai_model = ChatOpenAI(
+        model=model_name,
         api_key=vlm_config.api_key,
         base_url=vlm_config.api_base,
     )
-
-    model_name = vlm_config.model or "gpt-4o-mini"
-    return llm_factory(model_name, client=client)
+    return LangchainLLMWrapper(openai_model)
 
 
 class RagasEvaluator(BaseEvaluator):

@@ -1,19 +1,72 @@
+import importlib
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
 import sysconfig
 from pathlib import Path
 
-import pybind11
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
+
+try:
+    from wheel.bdist_wheel import bdist_wheel
+except ImportError:  # pragma: no cover - local build_ext may not have wheel installed
+    bdist_wheel = None
+
+SETUP_DIR = Path(__file__).resolve().parent
+if str(SETUP_DIR) not in sys.path:
+    sys.path.insert(0, str(SETUP_DIR))
+
+get_host_engine_build_config = importlib.import_module(
+    "build_support.x86_profiles"
+).get_host_engine_build_config
+resolve_openviking_version = importlib.import_module(
+    "build_support.versioning"
+).resolve_openviking_version
 
 CMAKE_PATH = shutil.which("cmake") or "cmake"
 C_COMPILER_PATH = shutil.which("gcc") or "gcc"
 CXX_COMPILER_PATH = shutil.which("g++") or "g++"
 ENGINE_SOURCE_DIR = "src/"
+ENGINE_BUILD_CONFIG = get_host_engine_build_config(platform.machine())
+
+
+def _get_windows_python_sabi_library() -> Path:
+    """Return the stable-ABI Python library path for Windows abi3 extensions."""
+    candidate_roots = []
+    for raw_root in (
+        sys.base_prefix,
+        sys.base_exec_prefix,
+        sysconfig.get_config_var("installed_base"),
+        sysconfig.get_config_var("base"),
+    ):
+        if not raw_root:
+            continue
+        candidate_root = Path(raw_root).resolve()
+        if candidate_root not in candidate_roots:
+            candidate_roots.append(candidate_root)
+
+    candidate_paths = []
+    for root in candidate_roots:
+        candidate_paths.extend(
+            [
+                root / "libs" / "python3.lib",
+                root / "python3.dll",
+            ]
+        )
+
+    for candidate_path in candidate_paths:
+        if candidate_path.exists():
+            return candidate_path
+
+    searched = ", ".join(str(path) for path in candidate_paths) or "<none>"
+    raise RuntimeError(
+        "Could not locate the Windows stable-ABI Python library for abi3 engine modules. "
+        f"Searched: {searched}"
+    )
 
 
 class OpenVikingBuildExt(build_ext):
@@ -22,6 +75,7 @@ class OpenVikingBuildExt(build_ext):
     def run(self):
         self.build_agfs_artifacts()
         self.build_ov_cli_artifact()
+        self.build_ragfs_python_artifact()
         self.cmake_executable = CMAKE_PATH
 
         for ext in self.extensions:
@@ -269,6 +323,9 @@ class OpenVikingBuildExt(build_ext):
             print("Building ov CLI from source...")
             try:
                 env = os.environ.copy()
+                env["OPENVIKING_VERSION"] = resolve_openviking_version(
+                    env=env, project_root=SETUP_DIR
+                )
                 build_args = ["cargo", "build", "--release"]
                 target = env.get("CARGO_BUILD_TARGET")
                 if target:
@@ -318,40 +375,150 @@ class OpenVikingBuildExt(build_ext):
             else:
                 print("[Warning] Cargo not found. Cannot build ov CLI from source.")
 
+    def build_ragfs_python_artifact(self):
+        """Build ragfs-python (Rust AGFS binding) via maturin and copy the native
+        extension into ``openviking/lib/`` so it ships inside the openviking wheel.
+
+        This is a best-effort build — the Go binding serves as fallback,
+        so failure here is non-fatal.
+        """
+        ragfs_python_dir = Path("crates/ragfs-python").resolve()
+        ragfs_lib_dir = Path("openviking/lib").resolve()
+
+        if not ragfs_python_dir.exists():
+            print("[Info] ragfs-python source directory not found. Skipping.")
+            return
+
+        if os.environ.get("OV_SKIP_RAGFS_BUILD") == "1":
+            print("[OK] Skipping ragfs-python build (OV_SKIP_RAGFS_BUILD=1)")
+            return
+
+        maturin_cmd = shutil.which("maturin")
+        if not maturin_cmd:
+            print(
+                "[SKIP] maturin not found. ragfs-python (Rust binding) will not be built.\n"
+                "       Install maturin to enable: pip install maturin\n"
+                "       The Go binding will be used as fallback."
+            )
+            return
+
+        import tempfile
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            try:
+                print("Building ragfs-python (Rust AGFS binding) via maturin...")
+                env = os.environ.copy()
+                build_args = [maturin_cmd, "build", "--release", "--out", tmpdir]
+                # Respect CARGO_BUILD_TARGET for cross-compilation
+                target = env.get("CARGO_BUILD_TARGET")
+                if target:
+                    build_args.extend(["--target", target])
+
+                result = subprocess.run(
+                    build_args,
+                    cwd=str(ragfs_python_dir),
+                    env=env,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                if result.stdout:
+                    print(result.stdout.decode("utf-8", errors="replace"))
+                if result.stderr:
+                    print(result.stderr.decode("utf-8", errors="replace"))
+
+                # Extract the native .so/.pyd from the built wheel.
+                whl_files = list(Path(tmpdir).glob("ragfs_python-*.whl"))
+                if not whl_files:
+                    print("[Warning] maturin produced no wheel. Skipping ragfs-python.")
+                    return
+
+                ragfs_lib_dir.mkdir(parents=True, exist_ok=True)
+                extracted = False
+                with zipfile.ZipFile(str(whl_files[0])) as zf:
+                    for name in zf.namelist():
+                        basename = Path(name).name
+                        # Match: ragfs_python.cpython-312-darwin.so, ragfs_python.cp312-win_amd64.pyd, etc.
+                        if basename.startswith("ragfs_python") and (
+                            basename.endswith(".so") or basename.endswith(".pyd")
+                        ):
+                            target_path = ragfs_lib_dir / basename
+                            with zf.open(name) as src, open(target_path, "wb") as dst:
+                                dst.write(src.read())
+                            if sys.platform != "win32":
+                                os.chmod(str(target_path), 0o755)
+                            print(f"[OK] ragfs-python: extracted {basename} -> {target_path}")
+                            extracted = True
+                            break
+
+                if not extracted:
+                    print("[Warning] Could not find ragfs_python .so/.pyd in built wheel.")
+                else:
+                    self._copy_artifacts_to_build_lib(target_lib=target_path)
+
+            except Exception as exc:
+                error_detail = ""
+                if isinstance(exc, subprocess.CalledProcessError):
+                    if exc.stdout:
+                        error_detail += exc.stdout.decode("utf-8", errors="replace")
+                    if exc.stderr:
+                        error_detail += exc.stderr.decode("utf-8", errors="replace")
+                print(f"[Warning] Failed to build ragfs-python: {exc}")
+                if error_detail:
+                    print(error_detail)
+                print("          The Go binding will be used as fallback.")
+
     def build_extension(self, ext):
         """Build a single Python native extension artifact using CMake."""
+        if getattr(self, "_engine_extensions_built", False):
+            return
+
         ext_fullpath = Path(self.get_ext_fullpath(ext.name))
         ext_dir = ext_fullpath.parent.resolve()
         build_dir = Path(self.build_temp) / "cmake_build"
         build_dir.mkdir(parents=True, exist_ok=True)
+        self._clean_stale_engine_artifacts(ext_dir)
 
         self._run_stage_with_artifact_checks(
             "CMake build",
             lambda: self._build_extension_impl(ext_fullpath, ext_dir, build_dir),
             [(ext_fullpath, f"native extension '{ext.name}'")],
         )
+        self._engine_extensions_built = True
+
+    def _clean_stale_engine_artifacts(self, ext_dir: Path):
+        """Remove stale non-abi3 engine binaries from wheel build output directories."""
+        source_engine_dir = (SETUP_DIR / "openviking" / "storage" / "vectordb" / "engine").resolve()
+        if ext_dir == source_engine_dir:
+            return
+
+        for pattern in ("*.so", "*.pyd"):
+            for artifact in ext_dir.glob(pattern):
+                artifact.unlink()
 
     def _build_extension_impl(self, ext_fullpath, ext_dir, build_dir):
         """Invoke CMake to build the Python native extension."""
-        py_output_name = ext_fullpath.stem
-        py_output_suffix = ext_fullpath.suffix
+        ext_basename = ext_fullpath.stem.split(".")[0]
+        built_filename = Path(self.get_ext_filename(self.extensions[0].name)).name
+        py_ext_suffix = built_filename.removeprefix(ext_basename)
+        if not py_ext_suffix:
+            py_ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ext_fullpath.suffix
 
         cmake_args = [
             f"-S{Path(ENGINE_SOURCE_DIR).resolve()}",
             f"-B{build_dir}",
             "-DCMAKE_BUILD_TYPE=Release",
-            f"-DPY_OUTPUT_DIR={ext_dir}",
-            f"-DPY_OUTPUT_NAME={py_output_name}",
-            f"-DPY_OUTPUT_SUFFIX={py_output_suffix}",
+            f"-DOV_PY_OUTPUT_DIR={ext_dir}",
+            f"-DOV_PY_EXT_SUFFIX={py_ext_suffix}",
+            f"-DOV_X86_BUILD_VARIANTS={';'.join(ENGINE_BUILD_CONFIG.cmake_variants)}",
             "-DCMAKE_VERBOSE_MAKEFILE=ON",
             "-DCMAKE_INSTALL_RPATH=$ORIGIN",
             f"-DPython3_EXECUTABLE={sys.executable}",
             f"-DPython3_INCLUDE_DIRS={sysconfig.get_path('include')}",
             f"-DPython3_LIBRARIES={sysconfig.get_config_vars().get('LIBRARY')}",
-            f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
             f"-DCMAKE_C_COMPILER={C_COMPILER_PATH}",
             f"-DCMAKE_CXX_COMPILER={CXX_COMPILER_PATH}",
-            f"-DOV_X86_SIMD_LEVEL={os.environ.get('OV_X86_SIMD_LEVEL', 'AVX2')}",
         ]
 
         if sys.platform == "darwin":
@@ -360,6 +527,8 @@ class OpenVikingBuildExt(build_ext):
             if target_arch:
                 cmake_args.append(f"-DCMAKE_OSX_ARCHITECTURES={target_arch}")
         elif sys.platform == "win32":
+            windows_python_sabi_library = _get_windows_python_sabi_library()
+            cmake_args.append(f"-DOV_PYTHON_SABI_LIBRARY={windows_python_sabi_library}")
             cmake_args.extend(["-G", "MinGW Makefiles"])
 
         self.spawn([self.cmake_executable] + cmake_args)
@@ -368,19 +537,35 @@ class OpenVikingBuildExt(build_ext):
         self.spawn([self.cmake_executable] + build_args)
 
 
+if bdist_wheel is not None:
+
+    class OpenVikingBdistWheel(bdist_wheel):
+        def finalize_options(self):
+            super().finalize_options()
+            self.py_limited_api = "cp310"
+else:
+    OpenVikingBdistWheel = None
+
+
+cmdclass = {
+    "build_ext": OpenVikingBuildExt,
+}
+if OpenVikingBdistWheel is not None:
+    cmdclass["bdist_wheel"] = OpenVikingBdistWheel
+
+
 setup(
     # install_requires=[
     #     f"pyagfs @ file://localhost/{os.path.abspath('third_party/agfs/agfs-sdk/python')}"
     # ],
     ext_modules=[
         Extension(
-            name="openviking.storage.vectordb.engine",
+            name=ENGINE_BUILD_CONFIG.primary_extension,
             sources=[],
+            py_limited_api=True,
         )
     ],
-    cmdclass={
-        "build_ext": OpenVikingBuildExt,
-    },
+    cmdclass=cmdclass,
     package_data={
         "openviking": [
             "bin/agfs-server",
@@ -388,8 +573,13 @@ setup(
             "lib/libagfsbinding.so",
             "lib/libagfsbinding.dylib",
             "lib/libagfsbinding.dll",
+            "lib/ragfs_python*.so",
+            "lib/ragfs_python*.pyd",
             "bin/ov",
             "bin/ov.exe",
+            "console/static/**/*",
+            "storage/vectordb/engine/*.abi3.so",
+            "storage/vectordb/engine/*.pyd",
         ],
     },
     include_package_data=True,
