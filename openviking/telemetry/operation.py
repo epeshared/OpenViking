@@ -193,6 +193,7 @@ class TelemetrySummaryBuilder:
                 "wait_duration_ms": round(float(gauges.get("queue.wait.duration_ms") or 0.0), 3),
                 "semantic": {
                     "processed": cls._i(gauges.get("queue.semantic.processed"), 0),
+                    "requeue_count": cls._i(gauges.get("queue.semantic.requeue_count"), 0),
                     "error_count": cls._i(gauges.get("queue.semantic.error_count"), 0),
                     "duration_ms": round(
                         float(gauges.get("queue.semantic.duration_ms") or 0.0), 3
@@ -203,6 +204,7 @@ class TelemetrySummaryBuilder:
                 },
                 "embedding": {
                     "processed": cls._i(gauges.get("queue.embedding.processed"), 0),
+                    "requeue_count": cls._i(gauges.get("queue.embedding.requeue_count"), 0),
                     "error_count": cls._i(gauges.get("queue.embedding.error_count"), 0),
                     "duration_ms": round(
                         float(gauges.get("queue.embedding.duration_ms") or 0.0), 3
