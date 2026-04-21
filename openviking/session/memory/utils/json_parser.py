@@ -11,6 +11,7 @@ Layer 5: Validation Tolerance - TypeAdapter(strict=False) + list item filtering
 """
 
 import json
+from dataclasses import asdict, is_dataclass
 from types import UnionType
 from typing import (
     Any,
@@ -25,7 +26,7 @@ from typing import (
 )
 
 import json_repair
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from openviking_cli.utils import get_logger
 
@@ -42,7 +43,34 @@ __all__ = [
     "_get_origin_type",
     "_get_arg_type",
     "_any_to_str",
+    "JsonUtils",
 ]
+
+
+class PydanticEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, BaseModel):
+            # 保存类名和属性值
+            return {**obj.model_dump(mode="python")}
+        elif is_dataclass(obj):
+            return asdict(obj)
+        return super().default(obj)
+
+
+class JsonUtils:
+    @staticmethod
+    def dumps(obj, indent=4, ensure_ascii=False):
+        if obj is None:
+            return None
+        return json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent, cls=PydanticEncoder)
+
+    @staticmethod
+    def loads(json_str, clazz=None):
+        if not json_str:
+            return None
+        if clazz:
+            return TypeAdapter.validate_python(clazz, json_repair.loads(json_str))
+        return json_repair.loads(json_str)
 
 
 def extract_json_content(s: str) -> str:
@@ -140,7 +168,7 @@ def _get_origin_type(annotation) -> Type:
     if origin is Union or origin is UnionType:
         args = get_args(annotation)
         # Handle Optional[T] which is Union[T, None]
-        if len(args) == 2 and args[1] == type(None):
+        if len(args) == 2 and args[1] is type(None):
             return _get_origin_type(args[0])
     elif origin is list:
         return list
@@ -162,7 +190,7 @@ def _get_arg_type(annotation) -> Optional[Type]:
     origin = get_origin(annotation)
     if origin is Union or origin is UnionType:
         args = get_args(annotation)
-        if len(args) == 2 and args[1] == type(None):
+        if len(args) == 2 and args[1] is type(None):
             return _get_arg_type(args[0])
     elif origin is list:
         args = get_args(annotation)
@@ -309,7 +337,9 @@ def parse_value_with_tolerance(value, annotation):
         else:
             parsed_value = value
     elif origin_type is list:
-        if isinstance(value, str):
+        if value is None:
+            parsed_value = []
+        elif isinstance(value, str):
             parsed_value = [value]
         elif isinstance(value, dict):
             parsed_value = [value]

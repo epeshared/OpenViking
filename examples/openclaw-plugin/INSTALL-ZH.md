@@ -32,9 +32,23 @@ curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples
 bash cleanup-memory-openviking.sh
 ```
 
-## 安装
+## 通过 ClawHub 安装（推荐）
 
-推荐使用 `npm` + `ov-install`。macOS、Linux、Windows 的流程相同。
+```bash
+openclaw plugins install clawhub:@openclaw/openviking
+```
+
+安装完成后运行交互式配置向导：
+
+```bash
+openclaw openviking setup
+```
+
+向导会检测 Python 环境、验证 OpenViking 包是否可用，并将配置写入 `$OPENCLAW_STATE_DIR/openclaw.json`（默认：`~/.openclaw/openclaw.json`）。
+
+## 通过 ov-install 安装（替代方案）
+
+`ov-install` 一键完成 Python/OpenViking 安装和插件部署。macOS、Linux、Windows 的流程相同。
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
@@ -178,6 +192,16 @@ cat ~/.openviking/data/log/openviking.log
 ```bash
 ov-install --current-version
 ```
+
+### 链路检查（可选）
+
+如果上述验证都正常，还想进一步确认从 Gateway 到 OpenViking 的完整链路是否通畅，可以使用插件自带的健康检查脚本：
+
+```bash
+python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
+```
+
+该脚本会进行一次真实的对话注入，然后从 OpenViking 侧验证会话是否被正确捕获、提交、归档并提取出记忆。详细说明见 [health_check_tools/HEALTHCHECK-ZH.md](./health_check_tools/HEALTHCHECK-ZH.md)。
 
 ## 卸载
 

@@ -15,8 +15,6 @@ Create `~/.openviking/ov.conf` in your project directory:
       "backend": "local"
     },
     "agfs": {
-      "port": 1833,
-      "log_level": "warn",
       "backend": "local"
     }
   },
@@ -51,7 +49,7 @@ Create `~/.openviking/ov.conf` in your project directory:
       "api_key"  : "your-volcengine-api-key",
       "provider" : "volcengine",
       "dimension": 1024,
-      "model"    : "doubao-embedding-vision-250615",
+      "model"    : "doubao-embedding-vision-251215",
       "input": "multimodal"
     }
   },
@@ -107,7 +105,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "dimension": 1024,
       "input": "multimodal"
     }
@@ -121,7 +119,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
 | `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
-| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, or `"gemini"` |
+| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, `"dashscope"`, or `"gemini"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
 | `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
@@ -156,7 +154,7 @@ When the embedding provider experiences consecutive transient failures (e.g. `42
 
 | Model | Dimension | Input Type | Notes |
 |-------|-----------|------------|-------|
-| `doubao-embedding-vision-250615` | 1024 | multimodal | Recommended |
+| `doubao-embedding-vision-251215` | 1024 | multimodal | Recommended |
 | `doubao-embedding-250615` | 1024 | text | Text only |
 
 With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), and mixed content.
@@ -302,6 +300,52 @@ Recommended dimensions: `768`, `1536`, or `3072` (default: `3072`).
 
 Get your API key at https://aistudio.google.com/apikey
 
+**DashScope (Alibaba Tongyi) provider:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "dashscope",
+      "api_key": "${DASHSCOPE_API_KEY}",
+      "model": "text-embedding-v4",
+      "dimension": 1024
+    }
+  }
+}
+```
+
+**Available DashScope models:**
+
+| Model | Dimension | Input Type | Notes |
+|-------|-----------|------------|-------|
+| `text-embedding-v3` | 1024 | text | Optimized for Chinese |
+| `text-embedding-v4` | 1024 | text | Optimized for Chinese |
+| `tongyi-embedding-vision-plus` | 1152 | multimodal | Supports fusion via `enable_fusion` |
+| `tongyi-embedding-vision-flash` | 768 | multimodal | Faster, lower cost |
+| `qwen3-vl-embedding` | 2560 | multimodal | Text + image + video |
+| `qwen2.5-vl-embedding` | 1024 | multimodal | Text + image + video |
+
+**Multimodal parameters** (text+image/video models only):
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `input_type` | str | `"multimodal"` or `"text"` | Embedding mode (default: `"multimodal"`) |
+| `enable_fusion` | bool | `false` | Enable fusion vectors for `tongyi-embedding-vision-*` models |
+| `res_level` | int | `2` | Image resolution level (1=high, 2=medium, 3=low) |
+| `max_video_frames` | int | `16` | Maximum video frames to embed |
+
+**Endpoint selection** — DashScope provides `api_base` defaults for China (`cn`) and international (`intl`) regions:
+
+| Region | `api_base` | Notes |
+|--------|-----------|-------|
+| China | `https://dashscope.aliyuncs.com` (default) | Recommended for users in mainland China |
+| International | `https://dashscope-intl.aliyuncs.com` | For users outside China |
+
+Custom endpoint URLs are also supported by setting a full URL.
+
+Get your API key at https://dashscope.console.aliyun.com/api-key
+
 **Non-symmetric retrieval** (different task types for indexing vs. query):
 
 ```json
@@ -323,7 +367,7 @@ Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILAR
 
 #### Sparse Embedding
 
-> **Note:** Volcengine sparse embedding is supported starting from model `doubao-embedding-vision-250615`.
+> **Note:** Volcengine sparse embedding is supported starting from model `doubao-embedding-vision-251215`.
 
 ```json
 {
@@ -331,7 +375,7 @@ Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILAR
     "sparse": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615"
+      "model": "doubao-embedding-vision-251215"
     }
   }
 }
@@ -364,13 +408,13 @@ Two approaches are supported:
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "dimension": 1024
     },
     "sparse": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615"
+      "model": "doubao-embedding-vision-251215"
     }
   }
 }
@@ -401,6 +445,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `100`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
+| `timeout` | float | Per-request HTTP timeout in seconds passed to the underlying OpenAI/LiteLLM client. Increase for slow endpoints (e.g., DashScope, local inference). Must be `> 0` (default: `60.0`) |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 | `stream` | bool | Enable streaming mode (for OpenAI-compatible providers, default: `false`) |
 
@@ -568,6 +613,7 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 | `api_base` | str | Endpoint URL (for `openai` provider) |
 | `model` | str | Model name (for `openai` or `litellm` providers) |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
+| `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
 **Supported providers:**
 - `vikingdb`: Volcengine VikingDB Rerank API (uses AK/SK)
@@ -579,14 +625,14 @@ If rerank is not configured, search uses vector similarity only.
 
 ### storage
 
-Storage configuration for context data, including file storage (AGFS) and vector database storage (VectorDB).
+Storage configuration for context data, including file storage (RAGFS) and vector database storage (VectorDB).
 
 #### Root Configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `workspace` | str | Local data storage path (main configuration) | "./data" |
-| `agfs` | object | AGFS configuration | {} |
+| `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
 
 
@@ -605,55 +651,17 @@ Storage configuration for context data, including file storage (AGFS) and vector
 }
 ```
 
-#### agfs
+#### agfs (RAGFS)
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `mode` | str | `"http-client"` or `"binding-client"` | `"http-client"` |
 | `backend` | str | `"local"`, `"s3"`, or `"memory"` | `"local"` |
-| `url` | str | AGFS service URL for `http-client` mode | `"http://localhost:1833"` |
 | `timeout` | float | Request timeout in seconds | `10.0` |
 | `s3` | object | S3 backend configuration (when backend is 's3') | - |
 
 **Configuration Examples**
 
-<details>
-<summary><b>HTTP Client (Default)</b></summary>
-
-Connects to a remote or local AGFS service via HTTP.
-
-```json
-{
-  "storage": {
-    "agfs": {
-      "mode": "http-client",
-      "url": "http://localhost:1833",
-      "timeout": 10.0
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><b>Binding Client (High Performance)</b></summary>
-
-Directly uses the AGFS Go implementation through a shared library. 
-
-**Config**:
-```json
-{
-  "storage": {
-    "agfs": {
-      "mode": "binding-client",
-      "backend": "local"
-    }
-  }
-}
-```
-
-</details>
+RAGFS uses Rust binding mode by default, directly accessing the file system through the Rust implementation.
 
 
 ##### S3 Backend Configuration
@@ -670,11 +678,11 @@ Directly uses the AGFS Go implementation through a shared library.
 | `use_path_style` | bool | true for PathStyle used by MinIO and some S3-compatible services; false for VirtualHostStyle used by TOS and some S3-compatible services | true |
 | `directory_marker_mode` | str | How to persist directory markers: `none`, `empty`, or `nonempty` | `"empty"` |
 
-`directory_marker_mode` controls how AGFS materializes directory objects in S3:
+`directory_marker_mode` controls how RAGFS materializes directory objects in S3:
 
-- `empty` is the default. AGFS writes a zero-byte directory marker and preserves empty-directory semantics.
+- `empty` is the default. RAGFS writes a zero-byte directory marker and preserves empty-directory semantics.
 - `nonempty` writes a non-empty marker payload. Use this for S3-compatible services such as TOS that reject zero-byte directory markers.
-- `none` switches AGFS to prefix-style S3 semantics. AGFS does not create directory marker objects, so empty directories are not persisted and may not be discoverable until they contain at least one child object.
+- `none` switches RAGFS to prefix-style S3 semantics. RAGFS does not create directory marker objects, so empty directories are not persisted and may not be discoverable until they contain at least one child object.
 
 Typical choices:
 
@@ -819,9 +827,9 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 
 | Field | Description | Default |
 |-------|-------------|---------|
-| `agent_scope_mode` | Agent memory namespace mode: `"user+agent"` isolates by `(user_id, agent_id)`, while `"agent"` isolates only by `agent_id` and shares agent memories across users of the same agent | `"user+agent"` |
+| `agent_scope_mode` | Deprecated and ignored. Kept only for backward compatibility with older `ov.conf` files. Agent/user namespace behavior is now controlled by per-account namespace policy. | `"user+agent"` |
 
-`agent_scope_mode` only affects agent-level namespaces such as `viking://agent/{agent_space}/memories/...`. User memories under `viking://user/{user_space}/memories/...` are not affected.
+`agent_scope_mode` no longer changes namespace behavior. The server now uses account-level namespace policy to choose between `viking://agent/{agent_id}/...` and `viking://agent/{agent_id}/user/{user_id}/...`.
 
 ### ovcli.conf
 
@@ -834,7 +842,12 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
   "account": "acme",
   "user": "alice",
   "agent_id": "my-agent",
-  "output": "table"
+  "output": "table",
+  "upload": {
+    "ignore_dirs": "node_modules,.cache,.nx",
+    "include": "*.md,*.pdf",
+    "exclude": "*.tmp,*.log"
+  }
 }
 ```
 
@@ -846,11 +859,22 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 | `user` | Default user sent as `X-OpenViking-User` | `null` |
 | `agent_id` | Agent identifier for agent space isolation | `null` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
+| `upload.ignore_dirs` | Default directory ignore list for `add-resource` (CSV) | `null` |
+| `upload.include` | Default include patterns for `add-resource` (CSV) | `null` |
+| `upload.exclude` | Default exclude patterns for `add-resource` (CSV) | `null` |
 
 CLI flags can override these identity fields per command:
 
 ```bash
 openviking --account acme --user alice --agent-id assistant-2 ls viking://
+```
+
+For `add-resource`, upload filter flags are merged additively with `ovcli.conf` defaults:
+
+```bash
+# ovcli.conf: upload.exclude="*.log"
+openviking add-resource ./docs --exclude "*.tmp"
+# effective exclude sent to server: "*.log,*.tmp"
 ```
 
 See [Deployment](./03-deployment.md) for details.
@@ -1030,7 +1054,8 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "api_key": "string",
     "model": "string",
     "api_base": "string",
-    "threshold": 0.1
+    "threshold": 0.1,
+    "extra_headers": {}
   },
   "encryption": {
     "enabled": false,
@@ -1055,7 +1080,6 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "workspace": "string",
     "agfs": {
       "backend": "local|s3|memory",
-      "url": "string",
       "timeout": 10
     },
     "transaction": {

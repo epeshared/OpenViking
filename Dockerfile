@@ -1,22 +1,18 @@
 # syntax=docker/dockerfile:1.9
 
-# Stage 1: provide Go toolchain (required by setup.py -> build_agfs_artifacts -> make build)
-FROM golang:1.26-trixie AS go-toolchain
+# Stage 1: provide Rust toolchain (required by setup.py -> build_ov_cli_artifact -> cargo build)
+# ragfs-python's default S3-enabled dependency set currently requires rustc >= 1.91.1.
+FROM rust:1.91.1-trixie AS rust-toolchain
 
-# Stage 2: provide Rust toolchain (required by setup.py -> build_ov_cli_artifact -> cargo build)
-FROM rust:1.88-trixie AS rust-toolchain
-
-# Stage 3: build Python environment with uv (builds AGFS + Rust CLI + C++ extension from source)
+# Stage 2: build Python environment with uv (builds Rust CLI + C++ extension from source)
 FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim AS py-builder
 
-# Reuse Go toolchain from stage 1 so setup.py can compile agfs-server in-place.
-COPY --from=go-toolchain /usr/local/go /usr/local/go
-# Reuse Rust toolchain from stage 2 so setup.py can compile ov CLI in-place.
+# Reuse Rust toolchain from stage 1 so setup.py can compile ov CLI in-place.
 COPY --from=rust-toolchain /usr/local/cargo /usr/local/cargo
 COPY --from=rust-toolchain /usr/local/rustup /usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
-ENV PATH="/app/.venv/bin:/usr/local/cargo/bin:/usr/local/go/bin:${PATH}"
+ENV PATH="/app/.venv/bin:/usr/local/cargo/bin:${PATH}"
 ARG OPENVIKING_VERSION=0.0.0
 ARG TARGETPLATFORM
 ARG UV_LOCK_STRATEGY=auto
@@ -65,9 +61,8 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
             ;; \
     esac
 
-# Build ragfs-python (Rust AGFS binding) and extract the native extension
-# into the installed openviking package so it ships alongside the Go binding.
-# Selection at runtime via RAGFS_IMPL env var (auto/rust/go).
+# Build ragfs-python (Rust RAGFS binding) and extract the native extension
+# into the installed openviking package.
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
     uv pip install maturin && \
     export _TMPDIR=$(mktemp -d) && \
@@ -103,7 +98,7 @@ print("WARNING: No ragfs_python .so/.pyd in wheel")
 sys.exit(1)
 PY
 
-# Stage 4: runtime
+# Stage 3: runtime
 FROM python:3.13-slim-trixie
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -119,6 +114,7 @@ COPY docker/openviking-console-entrypoint.sh /usr/local/bin/openviking-console-e
 RUN chmod +x /usr/local/bin/openviking-console-entrypoint
 ENV PATH="/app/.venv/bin:$PATH"
 ENV OPENVIKING_CONFIG_FILE="/app/ov.conf"
+ENV OPENVIKING_CLI_CONFIG_FILE="/app/ovcli.conf"
 
 EXPOSE 1933 8020
 
@@ -126,5 +122,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS http://127.0.0.1:1933/health || exit 1
 
 # Default runs server + console; override command to run CLI, e.g.:
-# docker run --rm <image> -v "$HOME/.openviking/ovcli.conf:/root/.openviking/ovcli.conf" openviking --help
+# docker run --rm -v "$HOME/.openviking/ovcli.conf:/app/ovcli.conf" <image> openviking --help
 ENTRYPOINT ["openviking-console-entrypoint"]

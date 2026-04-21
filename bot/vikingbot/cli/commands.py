@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import select
+import socket
 import sys
 import time
 import warnings
@@ -81,6 +82,32 @@ def get_or_create_machine_id() -> str:
 def _init_bot_data(config):
     """Initialize bot data directory and set global paths."""
     set_bot_data_path(config.bot_data_path)
+
+
+def _abort_if_port_in_use(port: int, label: str) -> None:
+    """Exit with a clear message if anything is already listening on ``port``.
+
+    Without this check, a stale process holding the port keeps serving
+    traffic while a freshly-started gateway silently fails to bind — the
+    operator believes they upgraded but the old (potentially unpatched)
+    binary is still answering requests.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        try:
+            s.connect(("127.0.0.1", port))
+            in_use = True
+        except (ConnectionRefusedError, socket.timeout, OSError):
+            in_use = False
+    if in_use:
+        print(
+            f"Error: {label} port {port} is already in use.\n"
+            f"  A previous process is still bound — refusing to start a duplicate.\n"
+            f"  Identify it:  lsof -nP -iTCP:{port} -sTCP:LISTEN\n"
+            f"  Kill it, then retry.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +276,8 @@ def gateway(
 ):
     """Start the vikingbot gateway with OpenAPI chat enabled by default."""
 
+    _abort_if_port_in_use(port, "vikingbot gateway")
+
     if verbose:
         import logging
 
@@ -297,7 +326,10 @@ def gateway(
         # if enable_console:
         #     tasks.append(start_console(console_port))
 
-        await asyncio.gather(*tasks)
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await agent_loop.close_mcp()
 
     asyncio.run(run())
 
@@ -348,6 +380,7 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, 
         sandbox_manager=sandbox_manager,
         config=config,
         eval=eval,
+        mcp_servers=config.tools.mcp_servers,
     )
     # Set the agent reference in cron if it uses the holder pattern
     if hasattr(cron, "_agent_holder"):
@@ -434,7 +467,7 @@ def prepare_channel(
         openapi_config = OpenAPIChannelConfig(
             enabled=True,
             port=openapi_port,
-            api_key="",  # No auth required by default
+            api_key="",
         )
         openapi_channel = OpenAPIChannel(
             openapi_config,
@@ -443,7 +476,9 @@ def prepare_channel(
             global_config=config,
         )
         channels.add_channel(openapi_channel)
-        logger.info(f"OpenAPI channel enabled on port {openapi_port}")
+        logger.info(
+            f"OpenAPI channel enabled on port {openapi_port}; configure an API key before using HTTP chat endpoints"
+        )
 
     if channels.enabled_channels:
         console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")
@@ -454,10 +489,15 @@ def prepare_channel(
 
 def prepare_heartbeat(config, agent_loop, session_manager) -> HeartbeatService:
     # Create heartbeat service
-    async def on_heartbeat(prompt: str, session_key: SessionKey | None = None) -> str:
+    async def on_heartbeat(
+        prompt: str,
+        session_key: SessionKey | None = None,
+        metadata: dict | None = None,
+    ) -> str:
         return await agent_loop.process_direct(
             prompt,
             session_key=session_key,
+            metadata=metadata,
         )
 
     heartbeat = HeartbeatService(
@@ -615,31 +655,36 @@ def chat(
     )
 
     async def run():
-        if is_single_turn:
-            # Single-turn mode: run channels and agent, exit after response
-            task_cron = asyncio.create_task(cron.start())
-            task_channels = asyncio.create_task(channels.start_all())
-            task_agent = asyncio.create_task(agent_loop.run())
+        try:
+            if is_single_turn:
+                # Single-turn mode: run channels and agent, exit after response
+                task_cron = asyncio.create_task(cron.start())
+                task_channels = asyncio.create_task(channels.start_all())
+                task_agent = asyncio.create_task(agent_loop.run())
 
-            # Wait for channels to complete (it will complete after getting response)
-            done, pending = await asyncio.wait([task_channels], return_when=asyncio.FIRST_COMPLETED)
+                # Wait for channels to complete (it will complete after getting response)
+                done, pending = await asyncio.wait(
+                    [task_channels], return_when=asyncio.FIRST_COMPLETED
+                )
 
-            # Cancel all other tasks
-            for task in pending:
-                task.cancel()
-            task_cron.cancel()
-            task_agent.cancel()
+                # Cancel all other tasks
+                for task in pending:
+                    task.cancel()
+                task_cron.cancel()
+                task_agent.cancel()
 
-            # Wait for cancellation
-            await asyncio.gather(task_cron, task_agent, return_exceptions=True)
-        else:
-            # Interactive mode: run forever
-            tasks = []
-            tasks.append(cron.start())
-            tasks.append(channels.start_all())
-            tasks.append(agent_loop.run())
+                # Wait for cancellation
+                await asyncio.gather(task_cron, task_agent, return_exceptions=True)
+            else:
+                # Interactive mode: run forever
+                tasks = []
+                tasks.append(cron.start())
+                tasks.append(channels.start_all())
+                tasks.append(agent_loop.run())
 
-            await asyncio.gather(*tasks)
+                await asyncio.gather(*tasks)
+        finally:
+            await agent_loop.close_mcp()
 
     try:
         asyncio.run(run())

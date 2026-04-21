@@ -10,6 +10,41 @@ python examples/openclaw-plugin/ov-healthcheck.py
 
 No extra dependencies — standard library only. Addresses and tokens are auto-discovered from `openclaw.json`.
 
+## Prerequisites
+
+### Gateway HTTP Endpoints Must Be Enabled
+
+Phase 1 conversation injection requires the Gateway's `/v1/responses` endpoint, which is **disabled by default**. Enable it in `openclaw.json`:
+
+```json
+{
+  "gateway": {
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        },
+        "responses": {
+          "enabled": true
+        }
+      }
+    }
+  }
+}
+```
+
+Restart Gateway to apply:
+
+```bash
+openclaw gateway restart
+```
+
+Without this, Phase 1 will fail with:
+
+```
+[FAIL] Chat turn 1 failed (POST http://127.0.0.1:18789/v1/responses failed with HTTP 404: Not Found)
+```
+
 ## Expected Output
 
 A successful run looks like this:
@@ -47,15 +82,19 @@ Phase 4: follow-up through Gateway
 [PASS] Same-session follow-up recalled earlier facts (go,postgresql,redis,70)
 [PASS] Fresh-session recall returned seeded stack facts (...)
 
+Phase 5: cleanup
+[PASS] Deleted synthetic session (...)
+[PASS] Deleted synthetic memory (viking://user/default/memories/...)
+
 Summary
-PASS=18 WARN=0 FAIL=0 SKIP=0
+PASS=20 WARN=0 FAIL=0 SKIP=0
 
 Healthcheck passed.
 ```
 
 Phase 3 waits for the async commit to finish (up to 300s by default). This is normal — commit involves LLM calls for archiving and memory extraction.
 
-All test messages are prefixed with `[OPENVIKING-HEALTHCHECK]` and marked as synthetic data, so they won't interfere with real user conversations.
+All test messages are prefixed with `[OPENVIKING-HEALTHCHECK]` and carry a unique probe marker, but the body of the conversation is written like normal memory-bearing user dialogue. The seeded Kafka topic, callback host, and debug tag are also derived from that probe so the run creates uniquely identifiable artifacts. By default the script deletes the synthetic sessions and only the probe-scoped leaf memories from the current run. Shared summary files such as `profile.md`, preferences, or abstract files are intentionally left alone even if they contain synthetic facts, to avoid deleting mixed real user memory. Use `--keep-artifacts` only when you explicitly want to inspect the leftovers for debugging.
 
 ## How It Works
 
@@ -63,7 +102,7 @@ The script validates the plugin by injecting a controlled conversation and traci
 
 **Probe marker** — Each run generates a unique random marker (e.g. `probe-a1b2c3d4`). This marker is embedded in the first message and later used to locate the exact session in OpenViking, ensuring the script never confuses its own test session with real user data.
 
-**Phase 1: Conversation injection** — The script sends 4 synthetic messages through the Gateway `/v1/responses` endpoint, simulating a real user conversation. The messages contain known facts (tech stack, Kafka topic, service address, etc.) that serve as verification anchors later. All messages are prefixed with `[OPENVIKING-HEALTHCHECK]` so the LLM and OpenViking can distinguish them from real conversations.
+**Phase 1: Conversation injection** — The script sends 4 probe-tagged messages through the Gateway `/v1/responses` endpoint, simulating a real user conversation. The messages contain known facts (tech stack, Kafka topic, service address, etc.) that serve as verification anchors later. The `[OPENVIKING-HEALTHCHECK]` prefix and the probe marker identify the run, while the body remains normal conversation content so memory extraction is exercised realistically.
 
 **Phase 2: Capture verification** — After a short wait (`--capture-wait`), the script queries the OpenViking sessions API and scans each session's context for the probe marker. Finding the marker proves that the plugin's `afterTurn` hook successfully captured the conversation from Gateway into OpenViking.
 
@@ -76,7 +115,9 @@ This confirms the full async pipeline: conversation archiving, overview generati
 
 **Phase 4: Recall verification** — Two final questions are sent through Gateway:
 1. A same-session follow-up asking about facts from the earlier turns. The reply is checked for keywords (`go`, `postgresql`, `redis`, `70`). This verifies context continuity within a session.
-2. A fresh-session question (new user ID) asking about facts that should only be available through memory recall. The reply is checked for keywords (`order_events_v2`, `payment-cb.internal:9443`). This verifies that `autoRecall` is injecting stored memories into new sessions.
+2. A fresh-session question (new user ID) asking about facts that should only be available through memory recall. The reply is checked for the run-specific Kafka topic and callback host derived from the probe. This verifies that `autoRecall` is injecting stored memories into new sessions.
+
+**Phase 5: Cleanup** — Unless `--keep-artifacts` is set, the script deletes the synthetic OpenViking sessions it created and removes synthetic memories only when they match the current run's probe-derived facts under the same user space. The memory root is resolved from the current runtime user space. This keeps repeated healthcheck runs from polluting the shared memory space without risking unrelated memories.
 
 **Keyword matching** — The script does not require exact reproduction. It lowercases the model's reply and checks whether at least 2 out of 4 (or 2 out of 2) target keywords appear. This tolerates paraphrasing while still catching complete recall failures.
 
@@ -104,6 +145,7 @@ This confirms the full async pipeline: conversation archiving, overview generati
 | `--delay <seconds>` | `1` | Delay between chat turns |
 | `--session-scan-limit <n>` | `0` (all) | Max sessions to scan for probe (0 = scan all) |
 | `--insecure` | off | Skip SSL certificate verification (self-signed certs) |
+| `--keep-artifacts` | off | Preserve the synthetic sessions and memories created by this run |
 | `--strict-warnings` | off | Exit non-zero on warnings |
 | `--json-out <path>` | — | Write JSON report to file |
 | `--verbose` / `-v` | off | Print extra debug output |
@@ -126,6 +168,29 @@ cat ~/.openviking/ov.conf
 ```
 
 Check `storage.workspace/log/openviking.log` for errors.
+
+### `Chat turn 1 failed (POST /v1/responses failed with HTTP 404: Not Found)`
+
+The most common Phase 1 failure. Gateway's `/v1/responses` and `/v1/chat/completions` endpoints are **disabled by default**. Enable them under `gateway.http.endpoints` in `openclaw.json`:
+
+```json
+{
+  "gateway": {
+    "http": {
+      "endpoints": {
+        "chatCompletions": { "enabled": true },
+        "responses": { "enabled": true }
+      }
+    }
+  }
+}
+```
+
+Restart Gateway:
+
+```bash
+openclaw gateway restart
+```
 
 ### `Probe session not found in OpenViking`
 
@@ -168,9 +233,10 @@ This is `INFO`, not a failure. If fresh-session recall answers correctly, the pi
 
 ## Recommended Debug Order
 
-1. Check `plugins.slots.contextEngine` is `openviking`
-2. Check Gateway `/health`
-3. Check OpenViking `/health`
-4. Check `openclaw logs --follow`
-5. Check OpenViking log
-6. Look at the specific failed phase in script output
+1. Confirm `gateway.http.endpoints` is configured as described in Prerequisites
+2. Check `plugins.slots.contextEngine` is `openviking`
+3. Check Gateway `/health`
+4. Check OpenViking `/health`
+5. Check `openclaw logs --follow`
+6. Check OpenViking log
+7. Look at the specific failed phase in script output

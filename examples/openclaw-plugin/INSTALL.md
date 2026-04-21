@@ -32,9 +32,23 @@ curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples
 bash cleanup-memory-openviking.sh
 ```
 
-## Install
+## Install via ClawHub (Recommended)
 
-The recommended path is `npm` + `ov-install`.
+```bash
+openclaw plugins install clawhub:@openclaw/openviking
+```
+
+After installation, run the interactive setup wizard:
+
+```bash
+openclaw openviking setup
+```
+
+The wizard detects your Python environment, verifies the OpenViking package, and writes configuration to `$OPENCLAW_STATE_DIR/openclaw.json` (default: `~/.openclaw/openclaw.json`).
+
+## Install via ov-install (Alternative)
+
+The `ov-install` helper automates both the Python/OpenViking installation and plugin deployment:
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
@@ -185,6 +199,16 @@ Check installed versions:
 ```bash
 ov-install --current-version
 ```
+
+### Pipeline Health Check (Optional)
+
+If the steps above all look good and you want to further verify the full Gateway → OpenViking pipeline, run the plugin's health check script:
+
+```bash
+python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
+```
+
+This script injects a real conversation through Gateway and then verifies from the OpenViking side that the session was captured, committed, archived, and had memories extracted. See [health_check_tools/HEALTHCHECK.md](./health_check_tools/HEALTHCHECK.md) for full details.
 
 ## Uninstall
 
